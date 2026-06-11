@@ -1,237 +1,194 @@
-## Lesson 1.2 — What GraphQL Solves: Over-fetching & Under-fetching
+# Lesson 1.2 - Problems with REST in Mobile Apps
 
-### What you'll learn
-- What GraphQL actually is (in plain language)
-- How it solves the exact problems from Lesson 1.1
-- Your first real GraphQL query — written step by step
-- A side-by-side comparison: REST vs GraphQL for the same feed screen
+## Goal
 
----
+Understand the common API problems that show up in React Native apps when screens depend on REST endpoints.
 
-### What is GraphQL?
+## Problem 1: Over-fetching
 
-GraphQL is a **query language for your API** — invented by Facebook in 2012 and open-sourced in 2015. They built it because they were running into the exact REST problems we described, but at Facebook scale with hundreds of millions of mobile users.
+Over-fetching means the API sends more data than the screen needs.
 
-The key idea: **instead of the server deciding what data to send, the client specifies exactly what it needs.**
+Imagine a product card that only displays:
 
-Think of it like this:
+- Product image
+- Product name
+- Price
 
-> **REST:** You go to a restaurant, and the chef brings you a fixed "combo meal" — whether you want all of it or not.
->
-> **GraphQL:** You go to the same restaurant, but now you tell the chef exactly what you want: "I'll have the rice, the dal, and the raita — skip the papad."
+But the REST endpoint returns:
 
-One endpoint. You ask for what you need. You get exactly that.
+- `id`
+- `name`
+- `price`
+- `category`
+- `imageUrl`
+- `description`
+- `brand`
+- `inStock`
+- `quantity`
+- `unit`
+- `discount`
+- `rating`
 
----
+The extra fields may be useful somewhere else, but this screen does not need all of them.
 
-### The GraphQL solution to the feed screen
+On mobile, extra data matters because users may be on:
 
-Remember the 61-request mess? Here's the same feed screen data — in a single GraphQL query:
+- Slow network
+- Expensive mobile data
+- Low-end devices
+- Battery-sensitive conditions
 
-```graphql
-query GetFeed {
-  posts(limit: 20) {
-    id
-    text
-    createdAt
-    author {
-      name
-      avatar
-    }
-    likesCount
-    commentsCount
-    isLikedByMe
-  }
-}
+## Problem 2: Under-fetching
+
+Under-fetching means one endpoint does not return enough data for the screen.
+
+Example product home screen:
+
+- Product list
+- Category chips
+- Logged-in user's latest orders
+
+With REST, this can become multiple requests:
+
+```txt
+GET /api/v1/products?page=1&size=10
+GET /api/v1/categories
+GET /api/v1/orders
 ```
 
-**One request. One response. Exactly the fields you need.**
+Each request has its own loading, error, retry, and race condition concerns.
 
-The server response:
+## Problem 3: Multiple API calls
 
-```json
-{
-  "data": {
-    "posts": [
-      {
-        "id": "post_1",
-        "text": "Just shipped a new React Native feature 🚀",
-        "createdAt": "2024-01-15T10:30:00Z",
-        "author": {
-          "name": "Priya Sharma",
-          "avatar": "https://cdn.example.com/priya.jpg"
-        },
-        "likesCount": 142,
-        "commentsCount": 23,
-        "isLikedByMe": false
-      },
-      {
-        "id": "post_2",
-        "text": "GraphQL changed how I think about mobile APIs",
-        "createdAt": "2024-01-15T09:15:00Z",
-        "author": {
-          "name": "Ravi Nair",
-          "avatar": "https://cdn.example.com/ravi.jpg"
-        },
-        "likesCount": 87,
-        "commentsCount": 11,
-        "isLikedByMe": true
+Multiple calls are not always wrong, but they create real app complexity.
+
+In React Native, multiple calls often produce code like this:
+
+```tsx
+const [products, setProducts] = useState([]);
+const [categories, setCategories] = useState([]);
+const [loadingProducts, setLoadingProducts] = useState(false);
+const [loadingCategories, setLoadingCategories] = useState(false);
+const [productsError, setProductsError] = useState<string | null>(null);
+const [categoriesError, setCategoriesError] = useState<string | null>(null);
+```
+
+This gets harder when the screen grows.
+
+You must decide:
+
+- Is the whole screen loading?
+- Is only one section loading?
+- What happens if products load but categories fail?
+- Should pull-to-refresh retry every request?
+- Should one failed request block the whole screen?
+
+## Problem 4: Screen-specific data needs
+
+Different mobile screens need different versions of the same resource.
+
+Product list screen:
+
+```txt
+id, name, price, imageUrl
+```
+
+Product details screen:
+
+```txt
+id, name, price, imageUrl, description, brand, rating, discount, inStock
+```
+
+Cart screen:
+
+```txt
+id, name, price, quantity, inStock
+```
+
+With REST, backend teams often solve this by creating more endpoints or adding query parameters. That can work, but over time it may produce a large API surface.
+
+## Problem 5: App versioning
+
+Mobile apps stay installed for a long time.
+
+If a backend changes a REST response, old app versions may break. This is why mobile teams often need careful API versioning.
+
+GraphQL does not remove the need for discipline, but it helps because the client explicitly lists the fields it uses. Backend teams can add new fields without changing existing queries.
+
+## REST screen example
+
+This example fetches products and categories separately.
+
+```tsx
+import { useEffect, useState } from "react";
+import { FlatList, Text, View } from "react-native";
+
+type Product = {
+  id: number;
+  name: string;
+  price: number | string;
+  imageUrl?: string;
+};
+
+export function RestProductHomeScreen() {
+  const [products, setProducts] = useState<Product[]>([]);
+  const [categories, setCategories] = useState<string[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    async function load() {
+      try {
+        setLoading(true);
+        setError(null);
+
+        const [productResponse, categoryResponse] = await Promise.all([
+          fetch("https://backend.ecom.subraatakumar.com/api/v1/products?page=1&size=10"),
+          fetch("https://backend.ecom.subraatakumar.com/api/v1/categories"),
+        ]);
+
+        if (!productResponse.ok || !categoryResponse.ok) {
+          throw new Error("Failed to load home screen data");
+        }
+
+        const productJson = await productResponse.json();
+        const categoryJson = await categoryResponse.json();
+
+        setProducts(productJson.data ?? []);
+        setCategories(categoryJson.data ?? categoryJson ?? []);
+      } catch (err) {
+        setError(err instanceof Error ? err.message : "Unknown error");
+      } finally {
+        setLoading(false);
       }
-    ]
-  }
-}
-```
-
-No over-fetching (only `name` and `avatar` from the user, not 10 other fields). No under-fetching (author details are nested right inside the post). No stitching logic in your component.
-
----
-
-### How it solves each problem
-
-#### ✅ Solves over-fetching
-You declare exactly which fields you want. The server sends only those.
-
-```graphql
-# Only want name and avatar? Ask for only those.
-query {
-  user(id: "42") {
-    name
-    avatar
-  }
-}
-```
-
-```json
-{
-  "data": {
-    "user": {
-      "name": "Priya Sharma",
-      "avatar": "https://cdn.example.com/priya.jpg"
     }
-  }
-}
-```
 
-No `email`, no `phone`, no `address`. Exactly what your UI needs.
+    load();
+  }, []);
 
-#### ✅ Solves under-fetching (N+1)
-GraphQL lets you traverse relationships in a single query. The server resolves them — not your client.
-
-```graphql
-query {
-  posts(limit: 20) {
-    text
-    author {        # nested relationship — resolved server-side
-      name
-      avatar
-    }
-    comments {      # another nested relationship
-      count
-    }
-  }
-}
-```
-
-One network request. The GraphQL server makes the database calls, not your app.
-
-#### ✅ Solves versioning
-GraphQL APIs are **versionless by design**. You add new fields to your schema without removing old ones. Old app versions keep working. New versions use the new fields.
-
-```graphql
-# Old app version asks for:
-query { user(id: "42") { name avatar } }
-
-# New app version asks for the new field too:
-query { user(id: "42") { name avatar bio followersCount } }
-
-# Both work against the same API. No /v1 /v2 needed.
-```
-
-#### ✅ Solves multiple endpoints
-GraphQL has a **single endpoint** (usually `/graphql`). All queries, mutations, and subscriptions go through it. Your network layer becomes dramatically simpler.
-
----
-
-### The React Native component — GraphQL way
-
-Here's that same feed screen, now with GraphQL (using Apollo Client — we'll set this up in Module 2):
-
-```javascript
-// FeedScreen.js — the GraphQL way ✨
-import React from 'react';
-import { FlatList, View, Text, Image, ActivityIndicator } from 'react-native';
-import { useQuery, gql } from '@apollo/client';
-
-// Define what you need — all in one place
-const GET_FEED = gql`
-  query GetFeed {
-    posts(limit: 20) {
-      id
-      text
-      author {
-        name
-        avatar
-      }
-      likesCount
-      commentsCount
-      isLikedByMe
-    }
-  }
-`;
-
-export default function FeedScreen() {
-  const { data, loading, error } = useQuery(GET_FEED);
-
-  if (loading) return <ActivityIndicator />;
-  if (error) return <Text>Error loading feed</Text>;
+  if (loading) return <Text>Loading...</Text>;
+  if (error) return <Text>{error}</Text>;
 
   return (
-    <FlatList
-      data={data.posts}
-      keyExtractor={item => item.id}
-      renderItem={({ item }) => (
-        <View>
-          <Image source={{ uri: item.author.avatar }} />
-          <Text>{item.author.name}</Text>
-          <Text>{item.text}</Text>
-          <Text>{item.likesCount} likes</Text>
-        </View>
-      )}
-    />
+    <View>
+      <Text>Categories: {categories.join(", ")}</Text>
+      <FlatList
+        data={products}
+        keyExtractor={(item) => String(item.id)}
+        renderItem={({ item }) => (
+          <Text>
+            {item.name} - Rs {item.price}
+          </Text>
+        )}
+      />
+    </View>
   );
 }
 ```
 
-Look how clean that is. No `useEffect`. No multiple fetch calls. No manual stitching. The component just declares what it needs and renders it.
+## Check your understanding
 
----
-
-### REST vs GraphQL — side by side
-
-| | REST | GraphQL |
-|---|---|---|
-| Endpoints | Many (`/posts`, `/users`, `/likes`...) | One (`/graphql`) |
-| Data fetching | Fixed response shape | Client defines the shape |
-| Over-fetching | Common | Eliminated |
-| N+1 requests | Common | Resolved server-side |
-| Versioning | `/v1`, `/v2`... | Versionless |
-| Real-time | Needs WebSocket separately | Built-in (Subscriptions) |
-| Type safety | Manual / OpenAPI | Built-in schema |
-
----
-
-### A common misconception
-
-> "Does GraphQL replace REST completely?"
-
-Not necessarily. GraphQL is a **better fit** for complex, relationship-heavy data with many consumers (like a mobile app). Simple CRUD APIs with few relationships can still work fine with REST. In the real world, you'll encounter both — and now you'll know which to choose.
-
----
-
-### Resources
-- 📖 [Official GraphQL Introduction](https://graphql.org/learn/)
-- 📖 [How Facebook Invented GraphQL — History](https://engineering.fb.com/2015/09/14/core-infra/graphql-a-data-query-language/)
-- 🛝 [GraphQL Playground — try queries live](https://studio.apollographql.com/sandbox/explorer)
-- 🎥 [GraphQL Explained in 100 Seconds — Fireship](https://www.youtube.com/watch?v=eIQh02xuVw4)
-
----
+- What is over-fetching?
+- What is under-fetching?
+- Why do multiple requests complicate loading and error states?
+- Why does mobile app versioning make API changes harder?
